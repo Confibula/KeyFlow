@@ -1,0 +1,636 @@
+print("🚀 Initializing KeyFlow... (This may take a moment on first launch)")
+
+from datetime import timedelta
+import os
+import time
+import json
+import pickle
+import threading
+import numpy as np
+import sys
+from sentence_transformers import SentenceTransformer
+from pynput import keyboard
+from datetime import datetime, timedelta, timezone
+import webview
+import pystray
+from PIL import Image
+import logging
+
+# Suppress Hugging Face unauthenticated and "position_ids" unexpected warnings
+logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
+logging.getLogger("transformers").setLevel(logging.ERROR)
+logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
+from huggingface_hub.utils import logging as hf_logging
+hf_logging.set_verbosity_error()
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'  # Silences TF logs
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error' # Silences HF logs
+os.environ['KMP_WARNINGS'] = '0' # Silences Intel math library logs
+
+# Force local-only mode for Hugging Face and Transformers (ensures no "phone home" checks)
+os.environ["HF_HUB_OFFLINE"] = "1"
+os.environ["TRANSFORMERS_OFFLINE"] = "1"
+
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(".")
+    return os.path.join(base_path, relative_path)
+
+# OAuth & Google API
+from google_auth_oauthlib.flow import InstalledAppFlow
+from googleapiclient.discovery import build
+from google.auth.transport.requests import Request
+
+MODEL_ID = "gemini-3.1-flash-lite-preview"
+
+APP_NAME = "KeyFlow"
+if sys.platform == "win32":
+    DATA_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME)
+
+os.makedirs(DATA_DIR, exist_ok=True)
+
+DB_FILE = os.path.join(DATA_DIR, "music_db.json")
+TOKEN_FILE = os.path.join(DATA_DIR, "token.pickle")
+CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
+
+SCOPES = ['https://www.googleapis.com/auth/youtube.readonly']
+
+DEFAULT_CONFIG = {
+    "context_window": 180,
+    "years": 15,
+    "char_threshold": 150,
+    "num_songs": 10000
+}
+
+class KeyFlowState:
+    def __init__(self):
+        self._lock = threading.RLock()
+        self.music_metadata_cache = []
+        self.active_songs = []
+        self.last_play_time = 0
+        self.current_candidates = []
+        self.candidate_index = 0
+        self.window = None
+        self.settings_window = None
+        self.window_ready = False
+        self.text_buffer = ""
+        self.sync_in_progress = False
+        self.config = DEFAULT_CONFIG.copy()
+        self._load_config()
+        self.load_metadata()
+
+    def _load_config(self):
+        if os.path.exists(CONFIG_FILE):
+            try:
+                with open(CONFIG_FILE, 'r') as f:
+                    self.config.update(json.load(f))
+            except Exception: pass
+        else:
+            self.save_config()
+
+    def save_config(self):
+        with self._lock:
+            with open(CONFIG_FILE, 'w') as f:
+                json.dump(self.config, f)
+
+    def set_sync_status(self, status):
+        with self._lock:
+            self.sync_in_progress = status
+
+    def get_sync_status(self):
+        with self._lock:
+            return self.sync_in_progress
+
+    def get_active_songs(self):
+        with self._lock:
+            return list(self.active_songs)
+
+    def get_metadata_cache(self):
+        with self._lock:
+            return list(self.music_metadata_cache)
+
+    def get_config(self, key):
+        with self._lock:
+            return self.config.get(key)
+
+    def load_metadata(self):
+        if os.path.exists(DB_FILE):
+            try:
+                with open(DB_FILE, 'r') as f:
+                    data = json.load(f)
+                with self._lock:
+                    self.music_metadata_cache = data
+                    self.filter_songs()
+                return True
+            except Exception: pass
+        return False
+
+    def save_metadata(self, data):
+        with self._lock:
+            self.music_metadata_cache = data
+            with open(DB_FILE, 'w') as f:
+                json.dump(data, f)
+            self.filter_songs()
+
+    def filter_songs(self):
+        with self._lock:
+            if not self.music_metadata_cache:
+                self.active_songs = []
+                return
+            years_ago = datetime.now(timezone.utc) - timedelta(days=self.config["years"]*365)
+            filtered = []
+            if self.music_metadata_cache and 'publishedAt' not in self.music_metadata_cache[0]:
+                print("ℹ️  Note: Local database is using an older format without dates. History filtering is disabled until your next sync.")
+                self.active_songs = self.music_metadata_cache
+                return
+            for s in self.music_metadata_cache:
+                try:
+                    date_obj = datetime.strptime(s['publishedAt'], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
+                    if date_obj >= years_ago: filtered.append(s)
+                except Exception: filtered.append(s)
+            if not filtered and self.music_metadata_cache:
+                self.active_songs = self.music_metadata_cache
+            else:
+                self.active_songs = filtered
+            print(f"✅ Active library updated: {len(self.active_songs)} songs available.")
+
+    def update_buffer(self, key):
+        with self._lock:
+            char_to_add = ""
+            if hasattr(key, 'char') and key.char is not None:
+                char_to_add = key.char
+            elif key == keyboard.Key.space: char_to_add = " "
+            elif key == keyboard.Key.enter: char_to_add = "\n"
+            elif key == keyboard.Key.backspace:
+                if len(self.text_buffer) > 0: self.text_buffer = self.text_buffer[:-1]
+                return self.text_buffer, False
+            if char_to_add:
+                self.text_buffer += char_to_add
+                if len(self.text_buffer) >= self.config["char_threshold"]:
+                    text = self.text_buffer
+                    self.text_buffer = ""
+                    return text, True
+            return self.text_buffer, False
+
+    def try_start_playback(self):
+        with self._lock:
+            now = time.time()
+            if now - self.last_play_time < self.config["context_window"]:
+                return False
+            self.last_play_time = now
+            return True
+
+    def set_candidates(self, matches):
+        with self._lock:
+            self.current_candidates = matches
+            self.candidate_index = 0
+            return self.current_candidates[0] if self.current_candidates else None
+
+    def get_next_candidate(self):
+        with self._lock:
+            self.candidate_index += 1
+            if self.current_candidates and self.candidate_index < len(self.current_candidates):
+                return self.current_candidates[self.candidate_index], self.candidate_index, len(self.current_candidates)
+            return None, 0, 0
+
+    def remove_song(self, video_id):
+        with self._lock:
+            original = len(self.music_metadata_cache)
+            self.music_metadata_cache = [s for s in self.music_metadata_cache if s['id'] != video_id]
+            if len(self.music_metadata_cache) < original:
+                with open(DB_FILE, 'w') as f:
+                    json.dump(self.music_metadata_cache, f)
+                self.filter_songs()
+                return True
+            return False
+
+    def update_settings(self, cw_min, years):
+        with self._lock:
+            self.config['context_window'] = cw_min * 60
+            self.config['years'] = years
+            self.save_config()
+            self.filter_songs()
+
+state = KeyFlowState()
+
+print("⏳ Loading embedding model...")
+local_model = SentenceTransformer('all-MiniLM-L6-v2')
+INJECTED_JS = """
+(function() {
+    const UNLIKE_SVG = "M8.041 1.635a2.447 2.447 0 011.763 3.047l-.53 1.858";
+    const run = () => {
+        const v = document.querySelector('video'), ad = document.querySelector('.ad-showing, .ad-interrupting');
+        if (ad) { if (v && !v.muted) v.muted = true; }
+        else if (v && v.muted) { v.muted = false; v.playbackRate = 1.0; }
+
+        document.querySelectorAll('ytmusic-notification-action-renderer').forEach(msg => {
+            if (!msg.hasAttribute('data-kf-c') && msg.querySelector('#sub-text')?.textContent.trim()) {
+                msg.setAttribute('data-kf-c', '1');
+                const id = new URLSearchParams(location.search).get('v');
+                if (id) window.pywebview.api.handle_unavailable_song(id);
+            }
+        });
+
+        document.querySelectorAll('ytmusic-toggle-menu-service-item-renderer').forEach(item => {
+            const p = item.querySelector('path'), d = p ? p.getAttribute('d') : "", t = item.textContent || "";
+            if (!item.hasAttribute('data-kf-h') && (d.includes(UNLIKE_SVG) || t.includes("Remove from Liked songs"))) {
+                item.setAttribute('data-kf-h', '1');
+                item.addEventListener('click', () => {
+                    const id = new URLSearchParams(location.search).get('v'), title = document.querySelector('ytmusic-player-bar .title');
+                    if (id) window.pywebview.api.log_unlike(id, title ? title.textContent.trim() : "Unknown");
+                });
+            }
+        });
+    };
+    // Run immediately to catch elements already in DOM
+    run();
+    new MutationObserver(run).observe(document, { childList: true, subtree: true, attributes: true });
+    window.addEventListener('play', run, true); // Catch autoplay starts immediately
+})();
+"""
+
+# --- AUTH & SYNC LOGIC ---
+
+def get_yt_service():
+    creds = None
+    
+    # 1. Use the absolute path for the token
+    if os.path.exists(TOKEN_FILE):
+        with open(TOKEN_FILE, 'rb') as token:
+            creds = pickle.load(token)
+
+    if not creds or not creds.valid:
+        if creds and creds.expired and creds.refresh_token:
+            creds.refresh(Request())
+        else:
+            # 2. client_secret.json is a resource that was likely bundled
+            secret_path = resource_path("client_secret.json")
+            if not os.path.exists(secret_path):
+                print("\n" + "!"*60)
+                print("❌ MISSING CONFIGURATION: 'client_secret.json' not found.")
+                print("\nTo use KeyFlow, you must provide your own Google OAuth secrets:")
+                print("1. Visit the Google Cloud Console (https://console.cloud.google.com/)")
+                print("2. Create a project and enable the 'YouTube Data API v3'.")
+                print("3. Go to 'Credentials' -> 'Create Credentials' -> 'OAuth client ID'.")
+                print("4. Choose 'Desktop app', name it anything you want, e.g 'KeyFlow', and create.")
+                print("5. Download the JSON, rename it to 'client_secret.json', and place")
+                print("   it in the root folder of this application.")
+                print("!"*60 + "\n")
+                input("Press Enter to exit...")
+                sys.exit(1)
+
+            print("\n🔑 Authorization required. A browser tab will open for Google Sign-In.")
+            print("   This allows KeyFlow to read your 'Liked' songs to create your local library.\n")
+
+            flow = InstalledAppFlow.from_client_secrets_file(secret_path, SCOPES)
+            creds = flow.run_local_server(port=0)
+
+        # 3. Save the token back to the writable BASE_DIR
+        with open(TOKEN_FILE, 'wb') as token:
+            pickle.dump(creds, token)
+
+    return build('youtube', 'v3', credentials=creds)
+
+def sync_library_if_needed():
+    if state.get_sync_status(): return
+    state.set_sync_status(True)
+
+    # Load existing songs to check for duplicates and avoid re-embedding
+    existing_songs = state.get_metadata_cache()
+
+    try:
+        existing_ids = {s['id'] for s in existing_songs}
+        youtube = get_yt_service()
+        new_songs = []
+        next_page_token = None
+        stop_loop = False
+        
+        # --- 1. FETCHING WITH FILTERS ---
+        print(f"🚀 Fetching liked songs... \
+              This may take a while if you have a large library or it's your first sync.")
+        
+        num_songs_limit = state.get_config("num_songs")
+        while not stop_loop and (len(new_songs) + len(existing_songs)) < num_songs_limit:
+            request = youtube.playlistItems().list(
+                playlistId="LL",
+                part="snippet,contentDetails",
+                maxResults=50,
+                pageToken=next_page_token
+            )
+            response = request.execute()
+
+            batch_ids = []
+            liked_dates = {}
+
+            for item in response.get('items', []):
+                vid_id = item['contentDetails']['videoId']
+                liked_dates[vid_id] = item['snippet']['publishedAt']
+                batch_ids.append(vid_id)
+
+            if batch_ids:
+                # Get Category and Duration for all 50 videos at once
+                v_request = youtube.videos().list(
+                    part="snippet,contentDetails",
+                    id=",".join(batch_ids)
+                )
+                v_response = v_request.execute()
+
+                for video in v_response.get('items', []):
+                    # 1. Check if Category is Music
+                    ALLOWED_CATEGORIES = ["10", "1", "24"]
+                    is_music = video['snippet'].get('categoryId') in ALLOWED_CATEGORIES
+
+                    # 2. Parse Duration (ISO 8601 format like 'PT3M45S')
+                    dur = video['contentDetails']['duration']
+                    if 'H' not in dur:
+                        mins = int(dur.split('M')[0].split('T')[-1]) if 'M' in dur else 0
+                        secs = int(dur.split('S')[0].split('M' if 'M' in dur else 'T')[-1]) if 'S' in dur else 0
+                        total_sec_approx = mins * 60 + secs
+
+                        # Feel free to adjust these duration filters as needed. 
+                        if is_music and 60 <= total_sec_approx <= 600: 
+                            if video['id'] not in existing_ids:
+                                new_songs.append({
+                                    "title": video['snippet']['title'],
+                                    "id": video['id'],
+                                    "duration": total_sec_approx,
+                                    "publishedAt": liked_dates[video['id']]
+                                })
+                            else: 
+                                # If we hit an existing song, we can assume we've caught up to the last sync point
+                                stop_loop = True
+                                break
+
+            if not stop_loop:
+                next_page_token = response.get('nextPageToken')
+                if not next_page_token: break
+
+        # --- 2. LOCAL EMBEDDING (No Quota!) ---
+        if new_songs:
+            print(f"✨ Generating embeddings for {len(new_songs)} new tracks...")
+            titles = [s['title'] for s in new_songs]
+            
+            vectors = local_model.encode(titles, show_progress_bar=True)
+
+            for i, vec in enumerate(vectors):
+                new_songs[i]['vector'] = vec.tolist()
+
+            # Combine: New songs first, then existing. Limit to max songs config.
+            final_songs = (new_songs + existing_songs)[:num_songs_limit]
+            state.save_metadata(final_songs)
+            print(f"🔥 Database updated! Added {len(new_songs)} new songs.")
+        else:
+            print("✅ Music library is already up to date.")
+    finally:
+        state.set_sync_status(False)
+
+# --- SEARCH & PLAYBACK ---
+
+def find_best_matches(vibe_query, limit=50):
+    songs = state.get_active_songs()
+    if not songs: return []
+        
+    vibe_vec = local_model.encode([vibe_query])[0]
+    vibe_vec = np.array(vibe_vec)
+    scored_songs = []
+    for song in songs:
+        song_vec = np.array(song['vector'])
+        score = np.dot(vibe_vec, song_vec) / (np.linalg.norm(vibe_vec) * np.linalg.norm(song_vec))
+        scored_songs.append((score, song))
+    scored_songs.sort(key=lambda x: x[0], reverse=True)
+    return [s[1] for s in scored_songs[:limit]]
+
+class PlayerAPI:
+    def _play_next_candidate(self):
+        next_match, idx, total = state.get_next_candidate()
+        if next_match:
+            print(f"🔄 Match {idx + 1}/{total}: {next_match['title']}")
+            threading.Thread(target=update_song, args=(next_match['id'],), daemon=True).start()
+        else:
+            print("⚠️ No more candidates left for this vibe search.")
+
+    def log_js_message(self, message):
+        print(f"JS Console: {message}")
+
+    def log_unlike(self, video_id, song_title):
+        print(f"\n🗑️  Unlike action detected in UI for video: {song_title}")
+        if state.remove_song(video_id):
+            print(f"✅ Successfully removed song {song_title} from music_db.json.")
+        else:
+            print(f"ℹ️ Note: Song {song_title} was removed from Liked list, but it wasn't in your local library anyway.")
+        
+        print("⏭️ Picking next candidate...")
+        self._play_next_candidate()
+
+    def handle_unavailable_song(self, video_id):
+        print(f"\n🚫 Song unavailable detected: {video_id}. Removing from library...")
+        state.remove_song(video_id)
+        self._play_next_candidate()
+
+class SettingsAPI:
+    def save_settings(self, cw_min, years):
+        state.update_settings(cw_min, years)
+        print("⚙️ Settings updated and saved.")
+        if state.settings_window:
+            state.settings_window.hide()
+
+def on_settings_closing():
+    if state.settings_window:
+        state.settings_window.hide()
+    return False  # Returning False prevents the window from being destroyed
+
+def show_settings_window():
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <style>
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; padding: 20px; background: #121212; color: white; }}
+            .control {{ margin-bottom: 25px; }}
+            label {{ display: block; margin-bottom: 10px; color: #b3b3b3; }}
+            input[type=range] {{ width: 100%; accent-color: #1db954; }}
+            button {{ background: #1db954; color: white; border: none; padding: 10px 25px; border-radius: 20px; cursor: pointer; font-weight: bold; }}
+            button:hover {{ background: #1ed760; }}
+            .val {{ color: #1db954; font-weight: bold; }}
+        </style>
+    </head>
+    <body>
+        <h2 style="margin-top: 0;">KeyFlow Settings</h2>
+        <div class="control">
+            <label>Keyflow Selection Interval: <span class="val" id="cw_val">{state.get_config('context_window') // 60}</span> min</label>
+            <input type="range" id="cw" min="1" max="60" value="{state.get_config('context_window') // 60}" oninput="document.getElementById('cw_val').innerText = this.value">
+        </div>
+        <div class="control">
+            <label>History Depth: <span class="val" id="years_val">{state.get_config('years')}</span> years</label>
+            <input type="range" id="years" min="1" max="15" value="{state.get_config('years')}" oninput="document.getElementById('years_val').innerText = this.value">
+        </div>
+        <button onclick="save()">Save Settings</button>
+        <script>
+            function save() {{
+                const cw = document.getElementById('cw').value;
+                const years = document.getElementById('years').value;
+                window.pywebview.api.save_settings(parseInt(cw), parseInt(years));
+            }}
+        </script>
+    </body>
+    </html>
+    """
+
+    if state.settings_window:
+        state.settings_window.load_html(html)
+        state.settings_window.show()
+        return
+
+    state.settings_window = webview.create_window('Keyflow Settings', html=html, js_api=SettingsAPI(), width=400, height=350, hidden=True)
+    state.settings_window.events.closing += on_settings_closing
+
+def start_player_init():
+    # 1. Create the window (starts at a blank page or YT Music home)
+    state.window = webview.create_window(APP_NAME,
+                                   'https://music.youtube.com/home',
+                                   js_api=PlayerAPI())
+    
+    # Prepare settings window (it will stay hidden until Tray Icon calls it)
+    show_settings_window()
+
+    # 2. Start the engine (this BLOCKS the thread, so nothing below this runs)
+    state.window.events.loaded += on_page_finished
+    webview.start(on_loaded, state.window, private_mode=False)
+
+def on_loaded(window):
+    state.window_ready = True
+    window.evaluate_js(INJECTED_JS)
+
+def on_page_finished(window):
+    """This runs every time a new URL finishes loading."""
+    window.evaluate_js(INJECTED_JS)
+
+def update_song(video_id):
+    if state.window and state.window_ready:
+        # This script finds the actual video element and toggles its state
+        script = """
+            try {
+                var video = document.querySelector('video');
+                if (video && !video.paused) {
+                    video.pause();
+                }
+            } catch(e) {
+                console.error("Cleanup/Pause failed", e);
+            }
+        """
+        state.window.evaluate_js(script)
+
+        # Tiny delay to let the browser engine process the JS state change before navigation
+        time.sleep(0.1)
+
+        new_url = f"https://music.youtube.com/watch?v={video_id}"
+        state.window.load_url(new_url)
+
+def process_and_play(captured_text):
+    if not state.try_start_playback(): return
+    if not captured_text.strip():
+        return
+
+    try:
+        matches = find_best_matches(captured_text)
+        if matches:
+            match = state.set_candidates(matches)
+            if match:
+                print(f"\n🎯 Match 1/{len(matches)}: {match['title']}")
+                update_song(match['id'])
+    
+    except Exception as e:
+        print(f"\n❌ Error in matching: {e}")
+        
+# --- LISTENER ---
+
+def on_press(key):
+    try:
+        result, threshold_hit = state.update_buffer(key)
+        
+        # Use \r to overwrite the line in console so it looks "live"
+        display = result.replace('\n', '↵')
+        if len(display) > 70: display = "..." + display[-67:]
+        print(f"\rCurrent Buffer: {display}     ", end="", flush=True)
+        
+        if threshold_hit:
+            print(f"\n✅ Threshold hit! Analyzing vibe from: \"{display}\"")
+            threading.Thread(target=process_and_play, args=(result,), daemon=True).start()
+    except Exception:
+        pass
+
+# --- 1. Move your Listener logic into a function ---
+def run_listener():
+    print("⌨️ Keyboard listener started...")
+    with keyboard.Listener(on_press=on_press) as listener:
+        listener.join()
+
+def create_tray_icon():
+    image = Image.open(resource_path(os.path.join('media', 'KeyFlow Logo.png'))).convert('RGBA').resize((64, 64))
+
+    def on_settings(icon, item):
+        show_settings_window()
+
+    def on_sync(icon, item):
+        threading.Thread(target=sync_library_if_needed, daemon=True).start()
+
+    def on_exit(icon, item):
+        icon.stop()
+        os._exit(0)
+
+    menu = pystray.Menu(
+        pystray.MenuItem("Settings", on_settings),
+        pystray.MenuItem("Sync Library", on_sync),
+        pystray.MenuItem("Exit", on_exit)
+    )
+    icon = pystray.Icon("KeyFlow", image, "KeyFlow", menu)
+    icon.run()
+
+def print_startup_guide():
+    guide = f"""
+{'='*60}
+   🌊 KEYFLOW: Keystroke-Driven YouTube Music 🌊
+{'='*60}
+
+HOW IT WORKS:
+- Vibe Detection: KeyFlow listens to your typing patterns locally.
+- Smart Selection: Once enough text is captured, it selects a song
+  from your Liked List that matches your current "vibe".
+- Ad-Free & Focused: Enjoy your music without interruptions.
+
+INTERACTIVE FEATURES:
+- In the player window, unliking a song (clicking 'Remove from Liked')
+  will immediately remove it from your local KeyFlow database and
+  queue up a better candidate.
+
+SYSTEM TRAY:
+- Look for the 'KF' icon in your system tray to:
+  ⚙️  Adjust history depth (how many years back to pull music).
+  ⚙️  Set the selection frequency.
+  🔄 Manually sync your library with YouTube.
+
+All processing is local. Your typing never leaves your machine.
+{'='*60}
+"""
+    print(guide)
+
+# --- 2. The "Main" Entry Point ---
+if __name__ == "__main__":
+    print_startup_guide()
+    
+    sync_library_if_needed()
+
+    # START TRAY ICON
+    threading.Thread(target=create_tray_icon, daemon=True).start()
+
+    # START LISTENER IN BACKGROUND
+    t = threading.Thread(target=run_listener, daemon=True)
+    t.start()
+
+    # START PLAYER ON MAIN THREAD
+    start_player_init()
+
