@@ -1,8 +1,6 @@
 #  KeyFlow
 
 KeyFlow: The Definitive Desktop Experience for YouTube Music
-Keystroke-driven. Ad-free. Your music, your way, really.
-
 
 ---
 
