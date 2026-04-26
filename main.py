@@ -49,7 +49,11 @@ MODEL_ID = "gemini-3.1-flash-lite-preview"
 
 APP_NAME = "KeyFlow"
 if sys.platform == "win32":
-    DATA_DIR = os.path.join(os.getenv('APPDATA'), APP_NAME)
+    # Ensures the path is explicitly within the user's Roaming AppData folder
+    appdata = os.environ.get('APPDATA') or os.path.expandvars(r'%USERPROFILE%\AppData\Roaming')
+    DATA_DIR = os.path.join(appdata, APP_NAME)
+else:
+    DATA_DIR = os.path.join(os.path.expanduser('~'), '.local', 'share', APP_NAME)
 
 os.makedirs(DATA_DIR, exist_ok=True)
 
@@ -267,24 +271,30 @@ def get_yt_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
-            # 2. client_secret.json is a resource that was likely bundled
-            secret_path = resource_path("client_secret.json")
+            # 2. client_secret.json should be in the application root (where the .exe or .py lives)
+            app_root = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
+            secret_path = os.path.join(app_root, "client_secret.json")
+
             if not os.path.exists(secret_path):
                 print("\n" + "!"*60)
                 print("❌ MISSING CONFIGURATION: 'client_secret.json' not found.")
+                print(f"Searched in: {app_root}")
                 print("\nTo use KeyFlow, you must provide your own Google OAuth secrets:")
                 print("1. Visit the Google Cloud Console (https://console.cloud.google.com/)")
                 print("2. Create a project and enable the 'YouTube Data API v3'.")
                 print("3. Go to 'Credentials' -> 'Create Credentials' -> 'OAuth client ID'.")
-                print("4. Choose 'Desktop app', name it anything you want, e.g 'KeyFlow', and create.")
+                print("4. Choose 'Desktop app', name it 'KeyFlow', and create.")
                 print("5. Download the JSON, rename it to 'client_secret.json', and place")
-                print("   it in the root folder of this application.")
+                print(f"   it in the root folder: {app_root}")
+                print("\n⚠️  SECURITY: Never share 'client_secret.json' as it identifies your app.")
                 print("!"*60 + "\n")
                 input("Press Enter to exit...")
                 sys.exit(1)
 
             print("\n🔑 Authorization required. A browser tab will open for Google Sign-In.")
-            print("   This allows KeyFlow to read your 'Liked' songs to create your local library.\n")
+            print("   This allows KeyFlow to read your 'Liked' songs to create your local library.")
+            print(f"   The access token will be saved to: {DATA_DIR}")
+            print("   ⚠️  IMPORTANT: Do not share 'token.pickle'. It grants access to your account.\n")
 
             flow = InstalledAppFlow.from_client_secrets_file(secret_path, SCOPES)
             creds = flow.run_local_server(port=0)
@@ -614,6 +624,9 @@ SYSTEM TRAY:
   🔄 Manually sync your library with YouTube.
 
 All processing is local. Your typing never leaves your machine.
+Library data and access tokens are stored in: {DATA_DIR}
+
+⚠️  SECURITY: Never share 'client_secret.json' or 'token.pickle' files!
 {'='*60}
 """
     print(guide)
@@ -633,4 +646,3 @@ if __name__ == "__main__":
 
     # START PLAYER ON MAIN THREAD
     start_player_init()
-
