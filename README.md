@@ -10,7 +10,7 @@ Keystroke-driven. Ad-free. Your music, your way, really.
 * Uses OAuth service to read your Youtube Liked List and filter out non-music.
 * Picks appropriate liked songs depending on context: what you write on the keyboard.
 
-# 🛠️ Initial Setup
+##  Initial Setup
 
 Setting up **KeyFlow** takes a few minutes, but it ensures **100% privacy** and a dedicated API quota for your account.
 
