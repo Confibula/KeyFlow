@@ -1,6 +1,6 @@
 #  KeyFlow
 
-The Definitive Desktop Experience for YouTube Music.
+An Improved Desktop Experience for YouTube Music.
 
 ---
 
