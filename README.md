@@ -15,7 +15,7 @@ Setting up **KeyFlow** takes a few minutes. All commands below should be run in 
 
 ### 1. Clone the Project
 ```bash
-git clone https://github.com/YOUR_USERNAME/KeyFlow.git
+git clone https://github.com/Confibula/KeyFlow.git
 cd KeyFlow
 ```
 
