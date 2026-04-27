@@ -70,44 +70,6 @@ DEFAULT_CONFIG = {
     "num_songs": 10000
 }
 
-import time, threading, ctypes, win32api
-from pywinauto import Desktop
-
-def get_text_under_mouse():
-    ctypes.windll.shcore.SetProcessDpiAwareness(1)
-    try:
-        # Get element at cursor
-        x, y = win32api.GetCursorPos()
-        el = Desktop(backend="uia").from_point(x, y)
-        if not el: return None
-
-        # Extract primary text: Prefer Document text stream, fallback to Window text
-        try:
-            if "Text" in el.get_active_types():
-                txt = el.iface_text.DocumentRange.GetText(-1).strip()
-                if txt: return txt
-        except: pass
-        
-        return el.window_text().strip() or el.element_info.name
-    except: return None
-
-def focus_monitor_thread():
-    print("--- Focused Monitor Active ---")
-    while True:
-        time.sleep(15)
-        
-        # Only capture hover text if keyboard is inactive (user is likely reading)
-        if time.time() - state.last_key_time < 15:
-            continue
-
-        txt = get_text_under_mouse()
-        if txt:
-            captured, threshold_hit = state.add_hover_text_to_buffer(txt)
-            if threshold_hit:
-                cleaned_txt = " ".join(captured.split())
-                print(f"\n[Hover Detection] Reading context threshold hit! Analyzing vibe from: \"{cleaned_txt}\"")
-                threading.Thread(target=process_and_play, args=(captured,), daemon=True).start()
-
 class KeyFlowState:
     def __init__(self):
         self._lock = threading.RLock()
@@ -220,30 +182,6 @@ class KeyFlowState:
                     text = self.text_buffer
                     self.text_buffer = ""
                     return text, True
-            return self.text_buffer, False
-
-    def add_hover_text_to_buffer(self, text):
-        with self._lock:
-            if not text or text == self.last_hover_text:
-                return None, False
-            self.last_hover_text = text
-            self.text_buffer += f" {text} "
-            if len(self.text_buffer) >= self.config["char_threshold"]:
-                captured = self.text_buffer
-                self.text_buffer = ""
-                return captured, True
-            return self.text_buffer, False
-
-    def add_clipboard_to_buffer(self, text):
-        with self._lock:
-            if text == self.last_clipboard:
-                return None, False
-            self.last_clipboard = text
-            self.text_buffer += f" {text} "
-            if len(self.text_buffer) >= self.config["char_threshold"]:
-                captured = self.text_buffer
-                self.text_buffer = ""
-                return captured, True
             return self.text_buffer, False
 
     def try_start_playback(self):
@@ -721,10 +659,6 @@ if __name__ == "__main__":
     # START LISTENER IN BACKGROUND
     t = threading.Thread(target=run_listener, daemon=True)
     t.start()
-
-    # --- UIAutomation test ---
-    thread = threading.Thread(target=focus_monitor_thread, daemon=True)
-    thread.start()
 
     # START PLAYER ON MAIN THREAD
     start_player_init()
