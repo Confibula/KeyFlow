@@ -1,5 +1,6 @@
-print("🚀 Initializing KeyFlow... (This may take a moment on first launch)")
+print("Initializing KeyFlow... (This may take a moment on first launch)")
 
+import sys
 from datetime import timedelta
 import os
 import time
@@ -7,7 +8,6 @@ import json
 import pickle
 import threading
 import numpy as np
-import sys
 from sentence_transformers import SentenceTransformer
 from pynput import keyboard
 from datetime import datetime, timedelta, timezone
@@ -64,7 +64,7 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 SCOPES = ['https://www.googleapis.com/auth/youtube.readonly']
 
 DEFAULT_CONFIG = {
-    "context_window": 180,
+    "context_window": 420,
     "years": 15,
     "char_threshold": 150,
     "num_songs": 10000
@@ -148,7 +148,7 @@ class KeyFlowState:
             years_ago = datetime.now(timezone.utc) - timedelta(days=self.config["years"]*365)
             filtered = []
             if self.music_metadata_cache and 'publishedAt' not in self.music_metadata_cache[0]:
-                print("ℹ️  Note: Local database is using an older format without dates. History filtering is disabled until your next sync.")
+                print("Note: Local database is using an older format without dates. History filtering is disabled until your next sync.")
                 self.active_songs = self.music_metadata_cache
                 return
             for s in self.music_metadata_cache:
@@ -160,7 +160,7 @@ class KeyFlowState:
                 self.active_songs = self.music_metadata_cache
             else:
                 self.active_songs = filtered
-            print(f"✅ Active library updated: {len(self.active_songs)} songs available.")
+            print(f"Active library updated: {len(self.active_songs)} songs available.")
 
     def update_buffer(self, key):
         with self._lock:
@@ -221,7 +221,7 @@ class KeyFlowState:
 
 state = KeyFlowState()
 
-print("⏳ Loading embedding model...")
+print("Loading embedding model...")
 local_model = SentenceTransformer('all-MiniLM-L6-v2')
 INJECTED_JS = """
 (function() {
@@ -277,7 +277,7 @@ def get_yt_service():
 
             if not os.path.exists(secret_path):
                 print("\n" + "!"*60)
-                print("❌ MISSING CONFIGURATION: 'client_secret.json' not found.")
+                print("MISSING CONFIGURATION: 'client_secret.json' not found.")
                 print(f"Searched in: {app_root}")
                 print("\nTo use KeyFlow, you must provide your own Google OAuth secrets:")
                 print("1. Visit the Google Cloud Console (https://console.cloud.google.com/)")
@@ -286,15 +286,15 @@ def get_yt_service():
                 print("4. Choose 'Desktop app', name it 'KeyFlow', and create.")
                 print("5. Download the JSON, rename it to 'client_secret.json', and place")
                 print(f"   it in the root folder: {app_root}")
-                print("\n⚠️  SECURITY: Never share 'client_secret.json' as it identifies your app.")
+                print("\nSECURITY: Never share 'client_secret.json' as it identifies your app.")
                 print("!"*60 + "\n")
                 input("Press Enter to exit...")
                 sys.exit(1)
 
-            print("\n🔑 Authorization required. A browser tab will open for Google Sign-In.")
+            print("\nAuthorization required. A browser tab will open for Google Sign-In.")
             print("   This allows KeyFlow to read your 'Liked' songs to create your local library.")
             print(f"   The access token will be saved to: {DATA_DIR}")
-            print("   ⚠️  IMPORTANT: Do not share 'token.pickle'. It grants access to your account.\n")
+            print("   IMPORTANT: Do not share 'token.pickle'. It grants access to your account.\n")
 
             flow = InstalledAppFlow.from_client_secrets_file(secret_path, SCOPES)
             creds = flow.run_local_server(port=0)
@@ -320,7 +320,7 @@ def sync_library_if_needed():
         stop_loop = False
         
         # --- 1. FETCHING WITH FILTERS ---
-        print(f"🚀 Fetching liked songs... \
+        print(f"Fetching liked songs... \
               This may take a while if you have a large library or it's your first sync.")
         
         num_songs_limit = state.get_config("num_songs")
@@ -381,7 +381,7 @@ def sync_library_if_needed():
 
         # --- 2. LOCAL EMBEDDING (No Quota!) ---
         if new_songs:
-            print(f"✨ Generating embeddings for {len(new_songs)} new tracks...")
+            print(f"Generating embeddings for {len(new_songs)} new tracks...")
             titles = [s['title'] for s in new_songs]
             
             vectors = local_model.encode(titles, show_progress_bar=True)
@@ -392,9 +392,9 @@ def sync_library_if_needed():
             # Combine: New songs first, then existing. Limit to max songs config.
             final_songs = (new_songs + existing_songs)[:num_songs_limit]
             state.save_metadata(final_songs)
-            print(f"🔥 Database updated! Added {len(new_songs)} new songs.")
+            print(f"Database updated! Added {len(new_songs)} new songs.")
         else:
-            print("✅ Music library is already up to date.")
+            print("Music library is already up to date.")
     finally:
         state.set_sync_status(False)
 
@@ -418,33 +418,33 @@ class PlayerAPI:
     def _play_next_candidate(self):
         next_match, idx, total = state.get_next_candidate()
         if next_match:
-            print(f"🔄 Match {idx + 1}/{total}: {next_match['title']}")
+            print(f"Match {idx + 1}/{total}: {next_match['title']}")
             threading.Thread(target=update_song, args=(next_match['id'],), daemon=True).start()
         else:
-            print("⚠️ No more candidates left for this vibe search.")
+            print("No more candidates left for this vibe search.")
 
     def log_js_message(self, message):
         print(f"JS Console: {message}")
 
     def log_unlike(self, video_id, song_title):
-        print(f"\n🗑️  Unlike action detected in UI for video: {song_title}")
+        print(f"\nUnlike action detected in UI for video: {song_title}")
         if state.remove_song(video_id):
-            print(f"✅ Successfully removed song {song_title} from music_db.json.")
+            print(f"Successfully removed song {song_title} from music_db.json.")
         else:
-            print(f"ℹ️ Note: Song {song_title} was removed from Liked list, but it wasn't in your local library anyway.")
+            print(f"Note: Song {song_title} was removed from Liked list, but it wasn't in your local library anyway.")
         
-        print("⏭️ Picking next candidate...")
+        print("Picking next candidate...")
         self._play_next_candidate()
 
     def handle_unavailable_song(self, video_id):
-        print(f"\n🚫 Song unavailable detected: {video_id}. Removing from library...")
+        print(f"\nSong unavailable detected: {video_id}. Removing from library...")
         state.remove_song(video_id)
         self._play_next_candidate()
 
 class SettingsAPI:
     def save_settings(self, cw_min, years):
         state.update_settings(cw_min, years)
-        print("⚙️ Settings updated and saved.")
+        print("Settings updated and saved.")
         if state.settings_window:
             state.settings_window.hide()
 
@@ -550,11 +550,11 @@ def process_and_play(captured_text):
         if matches:
             match = state.set_candidates(matches)
             if match:
-                print(f"\n🎯 Match 1/{len(matches)}: {match['title']}")
+                print(f"\nMatch 1/{len(matches)}: {match['title']}")
                 update_song(match['id'])
     
     except Exception as e:
-        print(f"\n❌ Error in matching: {e}")
+        print(f"\nError in matching: {e}")
         
 # --- LISTENER ---
 
@@ -568,14 +568,14 @@ def on_press(key):
         print(f"\rCurrent Buffer: {display}     ", end="", flush=True)
         
         if threshold_hit:
-            print(f"\n✅ Threshold hit! Analyzing vibe from: \"{display}\"")
+            print(f"\nThreshold hit! Analyzing vibe from: \"{display}\"")
             threading.Thread(target=process_and_play, args=(result,), daemon=True).start()
     except Exception:
         pass
 
 # --- 1. Move your Listener logic into a function ---
 def run_listener():
-    print("⌨️ Keyboard listener started...")
+    print("Keyboard listener started...")
     with keyboard.Listener(on_press=on_press) as listener:
         listener.join()
 
@@ -603,7 +603,7 @@ def create_tray_icon():
 def print_startup_guide():
     guide = f"""
 {'='*60}
-   🌊 KEYFLOW: Keystroke-Driven YouTube Music 🌊
+   KEYFLOW: Keystroke-Driven YouTube Music
 {'='*60}
 
 HOW IT WORKS:
@@ -619,14 +619,14 @@ INTERACTIVE FEATURES:
 
 SYSTEM TRAY:
 - Look for the 'KF' icon in your system tray to:
-  ⚙️  Adjust history depth (how many years back to pull music).
-  ⚙️  Set the selection frequency.
-  🔄 Manually sync your library with YouTube.
+  Adjust history depth (how many years back to pull music).
+  Set the selection frequency.
+  Manually sync your library with YouTube.
 
 All processing is local. Your typing never leaves your machine.
 Library data and access tokens are stored in: {DATA_DIR}
 
-⚠️  SECURITY: Never share 'client_secret.json' or 'token.pickle' files!
+SECURITY: Never share 'client_secret.json' or 'token.pickle' files!
 {'='*60}
 """
     print(guide)
