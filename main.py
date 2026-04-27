@@ -70,6 +70,44 @@ DEFAULT_CONFIG = {
     "num_songs": 10000
 }
 
+import time, threading, ctypes, win32api
+from pywinauto import Desktop
+
+def get_text_under_mouse():
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+    try:
+        # Get element at cursor
+        x, y = win32api.GetCursorPos()
+        el = Desktop(backend="uia").from_point(x, y)
+        if not el: return None
+
+        # Extract primary text: Prefer Document text stream, fallback to Window text
+        try:
+            if "Text" in el.get_active_types():
+                txt = el.iface_text.DocumentRange.GetText(-1).strip()
+                if txt: return txt
+        except: pass
+        
+        return el.window_text().strip() or el.element_info.name
+    except: return None
+
+def focus_monitor_thread():
+    print("--- Focused Monitor Active ---")
+    while True:
+        time.sleep(15)
+        
+        # Only capture hover text if keyboard is inactive (user is likely reading)
+        if time.time() - state.last_key_time < 15:
+            continue
+
+        txt = get_text_under_mouse()
+        if txt:
+            captured, threshold_hit = state.add_hover_text_to_buffer(txt)
+            if threshold_hit:
+                cleaned_txt = " ".join(captured.split())
+                print(f"\n[Hover Detection] Reading context threshold hit! Analyzing vibe from: \"{cleaned_txt}\"")
+                threading.Thread(target=process_and_play, args=(captured,), daemon=True).start()
+
 class KeyFlowState:
     def __init__(self):
         self._lock = threading.RLock()
@@ -83,6 +121,9 @@ class KeyFlowState:
         self.window_ready = False
         self.text_buffer = ""
         self.sync_in_progress = False
+        self.last_key_time = time.time()
+        self.last_hover_text = ""
+        self.last_clipboard = ""
         self.config = DEFAULT_CONFIG.copy()
         self._load_config()
         self.load_metadata()
@@ -164,6 +205,7 @@ class KeyFlowState:
 
     def update_buffer(self, key):
         with self._lock:
+            self.last_key_time = time.time()
             char_to_add = ""
             if hasattr(key, 'char') and key.char is not None:
                 char_to_add = key.char
@@ -178,6 +220,30 @@ class KeyFlowState:
                     text = self.text_buffer
                     self.text_buffer = ""
                     return text, True
+            return self.text_buffer, False
+
+    def add_hover_text_to_buffer(self, text):
+        with self._lock:
+            if not text or text == self.last_hover_text:
+                return None, False
+            self.last_hover_text = text
+            self.text_buffer += f" {text} "
+            if len(self.text_buffer) >= self.config["char_threshold"]:
+                captured = self.text_buffer
+                self.text_buffer = ""
+                return captured, True
+            return self.text_buffer, False
+
+    def add_clipboard_to_buffer(self, text):
+        with self._lock:
+            if text == self.last_clipboard:
+                return None, False
+            self.last_clipboard = text
+            self.text_buffer += f" {text} "
+            if len(self.text_buffer) >= self.config["char_threshold"]:
+                captured = self.text_buffer
+                self.text_buffer = ""
+                return captured, True
             return self.text_buffer, False
 
     def try_start_playback(self):
@@ -351,7 +417,7 @@ def sync_library_if_needed():
 
                 for video in v_response.get('items', []):
                     # 1. Check if Category is Music
-                    ALLOWED_CATEGORIES = ["10", "1", "24"]
+                    ALLOWED_CATEGORIES = ["10", "1", "24", "20"] # Music, Film, Entertainment, Gaming
                     is_music = video['snippet'].get('categoryId') in ALLOWED_CATEGORIES
 
                     # 2. Parse Duration (ISO 8601 format like 'PT3M45S')
@@ -499,13 +565,22 @@ def show_settings_window():
     state.settings_window.events.closing += on_settings_closing
 
 def start_player_init():
+    # Close the splash screen if it's still open (PyInstaller only)
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass
+
     # 1. Create the window (starts at a blank page or YT Music home)
     state.window = webview.create_window(APP_NAME,
                                    'https://music.youtube.com/home',
                                    js_api=PlayerAPI())
-    
+
     # Prepare settings window (it will stay hidden until Tray Icon calls it)
     show_settings_window()
+
+    state.window.events.closing += lambda: os._exit(0)  
 
     # 2. Start the engine (this BLOCKS the thread, so nothing below this runs)
     state.window.events.loaded += on_page_finished
@@ -568,7 +643,8 @@ def on_press(key):
         print(f"\rCurrent Buffer: {display}     ", end="", flush=True)
         
         if threshold_hit:
-            print(f"\nThreshold hit! Analyzing vibe from: \"{display}\"")
+            full_buffer = " ".join(result.split())
+            print(f"\nThreshold hit! Analyzing vibe from: \"{full_buffer}\"")
             threading.Thread(target=process_and_play, args=(result,), daemon=True).start()
     except Exception:
         pass
@@ -616,6 +692,8 @@ INTERACTIVE FEATURES:
 - In the player window, unliking a song (clicking 'Remove from Liked')
   will immediately remove it from your local KeyFlow database and
   queue up a better candidate.
+- Not writing anything? Copying text to your clipboard can also trigger vibe detection! 
+  Passwords and code snippets are ignored by our heuristics.
 
 SYSTEM TRAY:
 - Look for the 'KF' icon in your system tray to:
@@ -644,5 +722,14 @@ if __name__ == "__main__":
     t = threading.Thread(target=run_listener, daemon=True)
     t.start()
 
+    # --- UIAutomation test ---
+    thread = threading.Thread(target=focus_monitor_thread, daemon=True)
+    thread.start()
+
     # START PLAYER ON MAIN THREAD
     start_player_init()
+
+"""
+TODO: 
+User should be able to choose between Youtube, Spotify, and Apple Music. Currently only a Youtube pipeline is implemented.
+"""
