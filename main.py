@@ -590,6 +590,7 @@ def on_press(key):
 
         # Use \r to overwrite the line in console so it looks "live"
         display = result.replace('\n', '↵')
+        if len(display) > 70: display = "..." + display[-67:]
         print(f"\rCurrent Buffer: {display}     ", end="", flush=True)
         
     except Exception:
