@@ -28,8 +28,7 @@ cd KeyFlow
 4.  **Credentials:** * Go to **Credentials** → **Create Credentials** → **OAuth client ID**.
     * Select **Application type:** `Desktop app`.
     * Name it `KeyFlow` and click **Create**.
-5.  **Finalize:** Download the JSON, rename it to `client_secret.json`, and move it to the KeyFlow root folder.
-    Be aware, the download page only appears once and no more due to Google Cloud security rules.
+5.  **Finalize:** Download the JSON, rename it to `client_secret.json`, and move it to the KeyFlow root folder. Please be aware, the download page only appears once and no more due to Google Cloud security rules.
 
 ---
 
