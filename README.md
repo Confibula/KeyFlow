@@ -10,7 +10,7 @@ A marginal increase in agency within these ecosystems yields an increase in emot
 
 ###  How it works
 * Uses OAuth service to read your Youtube Liked List and filter out non-music.
-* Picks appropriate liked songs depending on **context**: what you write on the keyboard.
+* Picks appropriate liked songs depending on **context**: your keyboard activity.
 * **Prerequisites:** You must have [Git](https://git-scm.com/) and [uv](https://docs.astral.sh/uv/) installed on your system.
 
 ##  Initial Setup
