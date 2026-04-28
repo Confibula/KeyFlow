@@ -245,35 +245,113 @@ print("Loading embedding model...")
 local_model = SentenceTransformer('all-MiniLM-L6-v2')
 INJECTED_JS = """
 (function() {
-    const UNLIKE_SVG = "M8.041 1.635a2.447 2.447 0 011.763 3.047l-.53 1.858";
-    const run = () => {
-        const v = document.querySelector('video'), ad = document.querySelector('.ad-showing, .ad-interrupting');
-        if (ad) { if (v && !v.muted) v.muted = true; }
-        else if (v && v.muted) { v.muted = false; v.playbackRate = 1.0; }
+    if (document.getElementById('buffer-view')) return;
 
+    const div = document.createElement('div');
+    div.id = 'buffer-view';
+    
+    // --- STYLING UPDATES ---
+    div.style.position = 'fixed';
+    div.style.bottom = '70px'; 
+    div.style.left = '10px';
+    div.style.right = '10px';
+    div.style.height = '70px';
+    div.style.backgroundColor = 'rgba(10, 10, 10, 0.9)';
+    div.style.color = '#00ff00';
+    div.style.zIndex = '2147483647';
+    div.style.padding = '8px 15px';
+    div.style.fontFamily = 'monospace';
+    div.style.borderRadius = '8px';
+    div.style.border = '1px solid #444';
+    div.style.overflowY = 'auto';
+    div.style.cursor = 'default';
+    
+    // IMPORTANT: Change this to 'auto' so the div can "feel" the mouse
+    div.style.pointerEvents = 'auto'; 
+    
+    div.innerText = '> KeyFlow: System Active (Hover to capture keys)';
+    document.body.appendChild(div);
+
+    // --- FOCUS HIJACK LOGIC ---
+    let isBufferActive = false;
+
+    div.addEventListener('mouseenter', () => {
+        isBufferActive = true;
+        div.style.borderColor = '#00ff00'; // Visual feedback that it's "Active"
+    });
+
+    div.addEventListener('mouseleave', () => {
+        isBufferActive = false;
+        div.style.borderColor = '#444';
+    });
+
+    // We catch the keydown at the highest level before it reaches the player
+    window.addEventListener('keydown', (e) => {
+        if (isBufferActive) {
+            // This stops Spacebar, 'k', 'm', etc., from triggering YouTube shortcuts
+            e.stopPropagation();
+            
+            // Optional: If you want to prevent scrolling too
+            if(e.code === "Space") e.preventDefault();
+        }
+    }, true); // The 'true' here is the Capture phase - very important!
+
+    // --- 2. LOGIC & OBSERVERS ---
+    const UNLIKE_SVG = "M8.041 1.635a2.447 2.447 0 011.763 3.047l-.53 1.858";
+    
+    const runLogic = () => {
+        // Handle Ad Muting
+        const v = document.querySelector('video');
+        const ad = document.querySelector('.ad-showing, .ad-interrupting');
+        if (ad) { 
+            if (v && !v.muted) v.muted = true; 
+        } else if (v && v.muted) { 
+            v.muted = false; 
+            v.playbackRate = 1.0; 
+        }
+
+        // Handle Unavailable Songs
         document.querySelectorAll('ytmusic-notification-action-renderer').forEach(msg => {
             if (!msg.hasAttribute('data-kf-c') && msg.querySelector('#sub-text')?.textContent.trim()) {
                 msg.setAttribute('data-kf-c', '1');
                 const id = new URLSearchParams(location.search).get('v');
-                if (id) window.pywebview.api.handle_unavailable_song(id);
+                if (id && window.pywebview?.api?.handle_unavailable_song) {
+                    window.pywebview.api.handle_unavailable_song(id);
+                }
             }
         });
 
+        // Handle Unlike Logging
         document.querySelectorAll('ytmusic-toggle-menu-service-item-renderer').forEach(item => {
-            const p = item.querySelector('path'), d = p ? p.getAttribute('d') : "", t = item.textContent || "";
+            const p = item.querySelector('path');
+            const d = p ? p.getAttribute('d') : "";
+            const t = item.textContent || "";
             if (!item.hasAttribute('data-kf-h') && (d.includes(UNLIKE_SVG) || t.includes("Remove from Liked songs"))) {
                 item.setAttribute('data-kf-h', '1');
                 item.addEventListener('click', () => {
-                    const id = new URLSearchParams(location.search).get('v'), title = document.querySelector('ytmusic-player-bar .title');
-                    if (id) window.pywebview.api.log_unlike(id, title ? title.textContent.trim() : "Unknown");
+                    const id = new URLSearchParams(location.search).get('v');
+                    const titleEl = document.querySelector('ytmusic-player-bar .title');
+                    if (id && window.pywebview?.api?.log_unlike) {
+                        window.pywebview.api.log_unlike(id, titleEl ? titleEl.textContent.trim() : "Unknown");
+                    }
                 });
             }
         });
     };
-    // Run immediately to catch elements already in DOM
-    run();
-    new MutationObserver(run).observe(document, { childList: true, subtree: true, attributes: true });
-    window.addEventListener('play', run, true); // Catch autoplay starts immediately
+
+    // Initialize
+    runLogic();
+    
+    // Watch for dynamic changes (song swaps, menu opens, ads appearing)
+    const observer = new MutationObserver(runLogic);
+    observer.observe(document.body, { 
+        childList: true, 
+        subtree: true, 
+        attributes: true 
+    });
+
+    // Cleanup listeners for smoother performance
+    window.addEventListener('play', runLogic, true);
 })();
 """
 
@@ -521,7 +599,7 @@ def start_player_init():
     except ImportError:
         pass
 
-    # 1. Create the window (starts at a blank page or YT Music home)
+    # Create the window, loading YouTube Music directly as the main content
     state.window = webview.create_window(APP_NAME,
                                    'https://music.youtube.com/home',
                                    js_api=PlayerAPI())
@@ -531,7 +609,7 @@ def start_player_init():
 
     state.window.events.closing += lambda: os._exit(0)  
 
-    # 2. Start the engine (this BLOCKS the thread, so nothing below this runs)
+    # Start the engine (this BLOCKS the thread)
     state.window.events.loaded += on_page_finished
     webview.start(on_loaded, state.window, private_mode=False)
 
@@ -589,6 +667,13 @@ def process_and_play(captured_text):
         
 # --- LISTENER ---
 
+# The Function your Keyboard Listener calls
+def update_buffer_ui(text):
+    if state.window:
+        escaped_text = text.replace("'", "\\'").replace("\n", " ")
+        js = f"var el = document.getElementById('buffer-view'); if(el) el.innerText = '> {escaped_text}';"
+        state.window.evaluate_js(js)
+
 def on_press(key):
     try:
         state.pressed_keys.add(key)
@@ -615,10 +700,11 @@ def on_press(key):
 
         result = state.update_buffer(key)
 
-        # Use \r to overwrite the line in console so it looks "live"
+        # Showing the buffer in the console (for debugging) and in the UI.
         display = result.replace('\n', '↵')
         if len(display) > 70: display = "..." + display[-67:]
         print(f"\rCurrent Buffer: {display}     ", end="", flush=True)
+        update_buffer_ui(result)
         
     except Exception:
         pass
