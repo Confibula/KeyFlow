@@ -75,8 +75,9 @@ class KeyFlowState:
         self._lock = threading.RLock()
         self.music_metadata_cache = []
         self.active_songs = []
-        self.current_candidates = []
-        self.candidate_index = 0
+        self._current_candidates = []
+        self._candidate_index = 0
+        self.max_candidates = 50
         self.window = None
         self.settings_window = None
         self.window_ready = False
@@ -87,6 +88,7 @@ class KeyFlowState:
         self.config = DEFAULT_CONFIG.copy()
         self._load_config()
         self.load_metadata()
+        self.fill_candidates()
 
     def _load_config(self):
         if os.path.exists(CONFIG_FILE):
@@ -133,6 +135,13 @@ class KeyFlowState:
                 return True
             except Exception: pass
         return False
+
+    def fill_candidates(self):
+        with self._lock:
+            if self.active_songs:
+                self._current_candidates = random.sample(self.active_songs, min(self.max_candidates, len(self.active_songs)))
+                self._candidate_index = 0
+                print(f"Filled candidates with {len(self._current_candidates)} random songs.")
 
     def save_metadata(self, data):
         with self._lock:
@@ -200,17 +209,17 @@ class KeyFlowState:
             self.text_buffer = ""
             return snapshot
 
-    def set_candidates(self, matches):
+    def _set_candidates(self, matches):
         with self._lock:
-            self.current_candidates = matches
-            self.candidate_index = 0
-            return self.current_candidates[0] if self.current_candidates else None
+            self._current_candidates = matches
+            self._candidate_index = 0
+            return self._current_candidates[0] if self._current_candidates else None
 
-    def get_next_candidate(self):
+    def _get_next_candidate(self):
         with self._lock:
-            self.candidate_index += 1
-            if self.current_candidates and self.candidate_index < len(self.current_candidates):
-                return self.current_candidates[self.candidate_index], self.candidate_index, len(self.current_candidates)
+            self._candidate_index += 1
+            if self._current_candidates and self._candidate_index < len(self._current_candidates):
+                return self._current_candidates[self._candidate_index], self._candidate_index, len(self._current_candidates)
             return None, 0, 0
 
     def remove_song(self, video_id):
@@ -411,7 +420,7 @@ def sync_library_if_needed():
 
 # --- SEARCH & PLAYBACK ---
 
-def find_best_matches(vibe_query, limit=50):
+def find_best_matches(vibe_query):
     songs = state.get_active_songs()
     if not songs: return []
         
@@ -423,11 +432,11 @@ def find_best_matches(vibe_query, limit=50):
         score = np.dot(vibe_vec, song_vec) / (np.linalg.norm(vibe_vec) * np.linalg.norm(song_vec))
         scored_songs.append((score, song))
     scored_songs.sort(key=lambda x: x[0], reverse=True)
-    return [s[1] for s in scored_songs[:limit]]
+    return [s[1] for s in scored_songs[:state.max_candidates]]
 
 class PlayerAPI:
     def _play_next_candidate(self):
-        next_match, idx, total = state.get_next_candidate()
+        next_match, idx, total = state._get_next_candidate()
         if next_match:
             print(f"Match {idx + 1}/{total}: {next_match['title']}")
             threading.Thread(target=update_song, args=(next_match['id'],), daemon=True).start()
@@ -570,7 +579,7 @@ def process_and_play(captured_text):
     try:
         matches = find_best_matches(text_to_process)
         if matches:
-            match = state.set_candidates(matches)
+            match = state._set_candidates(matches)
             if match:
                 print(f"\nMatch 1/{len(matches)}: {match['title']}")
                 update_song(match['id'])
