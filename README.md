@@ -9,8 +9,8 @@ As a user and one of the developers, I am inclined to say it will change the wor
 ###  How it works
 * Uses OAuth service to read your Youtube Liked List and filter out non-music.
 * Picks appropriate liked songs depending on context: what you write on the keyboard.
-   * [CTRL] + [BACKSPACE] clears buffer.
-   * [CTRL] + [SHIFT] + M activates song choice.
+   * **[CTRL]+[BACKSPACE]** clears buffer.
+   * **[CTRL]+[SHIFT]+M** activates song choice.
 * **Prerequisites:** You must have [Git](https://git-scm.com/) and [uv](https://docs.astral.sh/uv/) installed on your system.
 
 ##  Initial Setup
