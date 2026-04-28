@@ -2,7 +2,7 @@
 
 An Improved Desktop Experience for YouTube Music. 
 
-As a user and the developer, I am inclined to say it will change the world, revolutionize music and cure diseases. However, I should clarify this is purely my personal perspective, colored by the time I've spent bringing the program up and running.
+As a user and one of the developers, I am inclined to say it will change the world, revolutionize music and cure diseases. However, I should clarify this is purely my personal perspective, colored by the time I've spent bringing the program up and running.
 
 ---
 
@@ -13,7 +13,7 @@ As a user and the developer, I am inclined to say it will change the world, revo
 
 ##  Initial Setup
 
-Setting up **KeyFlow** takes a few minutes. All commands below should be run in your **CMD** or terminal.
+Setting up **KeyFlow** takes a few minutes, at the very least. All commands below should be run in your **CMD** or terminal.
 
 ### 1. Clone the Project
 ```bash
