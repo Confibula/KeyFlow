@@ -14,7 +14,7 @@ As a user and one of the developers, I am inclined to say it will change the wor
 
 ##  Initial Setup
 
-Setting up **KeyFlow** takes a few minutes, at the very least. All commands below should be run in your **CMD** or terminal.
+Setting up **KeyFlow** takes a few minutes, or unfortunately even longer. All commands below should be run in your **CMD** or terminal.
 
 ### 1. Clone the Project
 ```bash
