@@ -265,11 +265,12 @@ INJECTED_JS = """
     div.style.border = '1px solid #444';
     div.style.overflowY = 'auto';
     div.style.cursor = 'default';
+    div.style.whiteSpace = 'pre-wrap';
     
     // IMPORTANT: Change this to 'auto' so the div can "feel" the mouse
     div.style.pointerEvents = 'auto'; 
     
-    div.innerText = '> KeyFlow: System Active (Hover to capture keys)';
+    div.innerText = '> KeyFlow Active (Hover to capture keys) \\n\\t[CTRL]+[SHIFT]+M to trigger \\n\\t[CTRL]+[BACKSPACE] to clear';
     document.body.appendChild(div);
 
     // --- FOCUS HIJACK LOGIC ---
