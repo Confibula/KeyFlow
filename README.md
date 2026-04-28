@@ -2,7 +2,7 @@
 
 ## Philosophy
 
-KeyFlow is a structural intervention. It bridges the gap between massive media databases and individual autonomy by reintroducing manual control into the discovery loop. By shifting the "selection proxy" from a black-box algorithm to a user-driven context (the live buffer), the app transforms digital consumption from a passive habit into a deliberate, growth-oriented act.
+KeyFlow is a structural intervention. It bridges the gap between massive media databases and individual autonomy by reintroducing manual control into the discovery loop. By shifting the selection logic from a black-box algorithm to a user-driven context (the live buffer), the app transforms digital consumption from a passive habit into a deliberate, growth-oriented act.
 
 A marginal increase in agency within these ecosystems yields an increase in emotional value.
 
