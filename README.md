@@ -1,8 +1,10 @@
 #  KeyFlow
 
-An Improved Desktop Experience for YouTube Music. 
+## Philosophy
 
-As a user and one of the developers, I am inclined to say it will change the world, revolutionize music, and cure diseases. However, I should clarify this is solely my personal perspective, shaped by the time I've spent bringing the program up and running. I need to go outside and touch grass...
+KeyFlow is a structural intervention. It bridges the gap between massive media databases and individual autonomy by reintroducing manual control into the discovery loop. By shifting the "selection proxy" from a black-box algorithm to a user-driven context (the live buffer), the app transforms digital consumption from a passive habit into a deliberate, growth-oriented act.
+
+A marginal increase in agency within these ecosystems yields an increase in emotional value.
 
 ---
 
