@@ -64,9 +64,8 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 SCOPES = ['https://www.googleapis.com/auth/youtube.readonly']
 
 DEFAULT_CONFIG = {
-    "context_window": 420,
     "years": 15,
-    "char_threshold": 150,
+    "buffer_max_length": 300,
     "num_songs": 10000
 }
 
@@ -75,17 +74,15 @@ class KeyFlowState:
         self._lock = threading.RLock()
         self.music_metadata_cache = []
         self.active_songs = []
-        self.last_play_time = 0
         self.current_candidates = []
         self.candidate_index = 0
         self.window = None
         self.settings_window = None
         self.window_ready = False
         self.text_buffer = ""
+        self.pressed_keys = set()
         self.sync_in_progress = False
         self.last_key_time = time.time()
-        self.last_hover_text = ""
-        self.last_clipboard = ""
         self.config = DEFAULT_CONFIG.copy()
         self._load_config()
         self.load_metadata()
@@ -166,6 +163,7 @@ class KeyFlowState:
             print(f"Active library updated: {len(self.active_songs)} songs available.")
 
     def update_buffer(self, key):
+        """Updates the text buffer with a sliding window approach (max length)."""
         with self._lock:
             self.last_key_time = time.time()
             char_to_add = ""
@@ -175,22 +173,14 @@ class KeyFlowState:
             elif key == keyboard.Key.enter: char_to_add = "\n"
             elif key == keyboard.Key.backspace:
                 if len(self.text_buffer) > 0: self.text_buffer = self.text_buffer[:-1]
-                return self.text_buffer, False
+                return self.text_buffer
             if char_to_add:
                 self.text_buffer += char_to_add
-                if len(self.text_buffer) >= self.config["char_threshold"]:
-                    text = self.text_buffer
-                    self.text_buffer = ""
-                    return text, True
-            return self.text_buffer, False
-
-    def try_start_playback(self):
-        with self._lock:
-            now = time.time()
-            if now - self.last_play_time < self.config["context_window"]:
-                return False
-            self.last_play_time = now
-            return True
+                # Sliding window: keep only the most recent characters up to buffer_max_length
+                max_len = self.config.get("buffer_max_length", 200)
+                if len(self.text_buffer) > max_len:
+                    self.text_buffer = self.text_buffer[-max_len:]
+            return self.text_buffer
 
     def set_candidates(self, matches):
         with self._lock:
@@ -216,9 +206,8 @@ class KeyFlowState:
                 return True
             return False
 
-    def update_settings(self, cw_min, years):
+    def update_settings(self, years):
         with self._lock:
-            self.config['context_window'] = cw_min * 60
             self.config['years'] = years
             self.save_config()
             self.filter_songs()
@@ -446,8 +435,8 @@ class PlayerAPI:
         self._play_next_candidate()
 
 class SettingsAPI:
-    def save_settings(self, cw_min, years):
-        state.update_settings(cw_min, years)
+    def save_settings(self, years):
+        state.update_settings(years)
         print("Settings updated and saved.")
         if state.settings_window:
             state.settings_window.hide()
@@ -475,19 +464,14 @@ def show_settings_window():
     <body>
         <h2 style="margin-top: 0;">KeyFlow Settings</h2>
         <div class="control">
-            <label>Keyflow Selection Interval: <span class="val" id="cw_val">{state.get_config('context_window') // 60}</span> min</label>
-            <input type="range" id="cw" min="1" max="60" value="{state.get_config('context_window') // 60}" oninput="document.getElementById('cw_val').innerText = this.value">
-        </div>
-        <div class="control">
             <label>History Depth: <span class="val" id="years_val">{state.get_config('years')}</span> years</label>
             <input type="range" id="years" min="1" max="15" value="{state.get_config('years')}" oninput="document.getElementById('years_val').innerText = this.value">
         </div>
         <button onclick="save()">Save Settings</button>
         <script>
             function save() {{
-                const cw = document.getElementById('cw').value;
                 const years = document.getElementById('years').value;
-                window.pywebview.api.save_settings(parseInt(cw), parseInt(years));
+                window.pywebview.api.save_settings(parseInt(years));
             }}
         </script>
     </body>
@@ -554,12 +538,17 @@ def update_song(video_id):
         state.window.load_url(new_url)
 
 def process_and_play(captured_text):
-    if not state.try_start_playback(): return
-    if not captured_text.strip():
-        return
+    """Finds and plays a song based on captured text. Triggered manually by user."""
+    text_to_process = captured_text.strip()
+    if not text_to_process:
+        text_to_process = " " # Default value if buffer is empty
+
+    # Clear the buffer after it has been used to find a song
+    with state._lock:
+        state.text_buffer = ""
 
     try:
-        matches = find_best_matches(captured_text)
+        matches = find_best_matches(text_to_process)
         if matches:
             match = state.set_candidates(matches)
             if match:
@@ -573,24 +562,49 @@ def process_and_play(captured_text):
 
 def on_press(key):
     try:
-        result, threshold_hit = state.update_buffer(key)
+        state.pressed_keys.add(key)
+
+        # Check for CTRL + SHIFT + M combination
+        ctrl_pressed = any(k in state.pressed_keys for k in [keyboard.Key.ctrl_l, keyboard.Key.ctrl_r])
+        shift_pressed = any(k in state.pressed_keys for k in [keyboard.Key.shift, keyboard.Key.shift_l, keyboard.Key.shift_r])
         
+        m_pressed = False
+        if hasattr(key, 'vk') and key.vk == 77:
+            m_pressed = True
+
+        if ctrl_pressed and shift_pressed and m_pressed:
+            # Trigger the vibe search with whatever is in the buffer
+            buffer_snapshot = state.text_buffer
+            print(f"\n[TRIGGER] Manual song selection activated via CTRL+SHIFT+M")
+            threading.Thread(target=process_and_play, args=(buffer_snapshot,), daemon=True).start()
+            return # Don't add 'M' to the buffer when it's part of the trigger
+
+        # Check for CTRL + BACKSPACE to clear buffer
+        if ctrl_pressed and key == keyboard.Key.backspace:
+            with state._lock:
+                state.text_buffer = ""
+            print("\rBuffer cleared.                                         ", end="", flush=True)
+            return
+
+        result = state.update_buffer(key)
+
         # Use \r to overwrite the line in console so it looks "live"
         display = result.replace('\n', '↵')
-        if len(display) > 70: display = "..." + display[-67:]
         print(f"\rCurrent Buffer: {display}     ", end="", flush=True)
         
-        if threshold_hit:
-            full_buffer = " ".join(result.split())
-            print(f"\nThreshold hit! Analyzing vibe from: \"{full_buffer}\"")
-            threading.Thread(target=process_and_play, args=(result,), daemon=True).start()
     except Exception:
         pass
 
-# --- 1. Move your Listener logic into a function ---
+def on_release(key):
+    try:
+        if key in state.pressed_keys:
+            state.pressed_keys.remove(key)
+    except Exception:
+        pass
+
 def run_listener():
-    print("Keyboard listener started...")
-    with keyboard.Listener(on_press=on_press) as listener:
+    print("Keyboard listener started. Use CTRL+SHIFT+M to pick a song matching your typing.")
+    with keyboard.Listener(on_press=on_press, on_release=on_release) as listener:
         listener.join()
 
 def create_tray_icon():
@@ -622,8 +636,8 @@ def print_startup_guide():
 
 HOW IT WORKS:
 - Vibe Detection: KeyFlow listens to your typing patterns locally.
-- Smart Selection: Once enough text is captured, it selects a song
-  from your Liked List that matches your current "vibe".
+- Smart Selection: Press CTRL+SHIFT+M anytime to select a song
+  from your Liked List that matches your current typed "vibe".
 - Ad-Free & Focused: Enjoy your music without interruptions.
 
 INTERACTIVE FEATURES:
