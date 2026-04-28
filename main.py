@@ -15,6 +15,7 @@ import webview
 import pystray
 from PIL import Image
 import logging
+import random
 
 # Suppress Hugging Face unauthenticated and "position_ids" unexpected warnings
 logging.getLogger("transformers.modeling_utils").setLevel(logging.ERROR)
@@ -540,12 +541,19 @@ def update_song(video_id):
 def process_and_play(captured_text):
     """Finds and plays a song based on captured text. Triggered manually by user."""
     text_to_process = captured_text.strip()
-    if not text_to_process:
-        text_to_process = " " # Default value if buffer is empty
 
     # Clear the buffer after it has been used to find a song
     with state._lock:
         state.text_buffer = ""
+
+    if not text_to_process:
+        songs = state.get_active_songs()
+        if songs:
+            match = random.choice(songs)
+            print(f"\nBuffer empty. Picking a random song: {match['title']}")
+            state.set_candidates([match])
+            update_song(match['id'])
+        return
 
     try:
         matches = find_best_matches(text_to_process)
