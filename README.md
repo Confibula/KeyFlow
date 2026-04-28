@@ -2,7 +2,7 @@
 
 An Improved Desktop Experience for YouTube Music. 
 
-As a user and the developer, I am inclined to say it will change the world, revolutionize music and cure diseases. However, I should clarify that this is purely my personal perspective, colored by the time I've spent bringing the program up and running.
+As a user and the developer, I am inclined to say it will change the world, revolutionize music and cure diseases. However, I should clarify this is purely my personal perspective, colored by the time I've spent bringing the program up and running.
 
 ---
 
