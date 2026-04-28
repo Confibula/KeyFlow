@@ -183,6 +183,23 @@ class KeyFlowState:
                     self.text_buffer = self.text_buffer[-max_len:]
             return self.text_buffer
 
+    def get_buffer(self):
+        """Safely returns the current text buffer."""
+        with self._lock:
+            return self.text_buffer
+
+    def clear_buffer(self):
+        """Safely clears the text buffer."""
+        with self._lock:
+            self.text_buffer = ""
+
+    def consume_buffer(self):
+        """Returns the current buffer and clears it atomically."""
+        with self._lock:
+            snapshot = self.text_buffer
+            self.text_buffer = ""
+            return snapshot
+
     def set_candidates(self, matches):
         with self._lock:
             self.current_candidates = matches
@@ -542,16 +559,11 @@ def process_and_play(captured_text):
     """Finds and plays a song based on captured text. Triggered manually by user."""
     text_to_process = captured_text.strip()
 
-    # Clear the buffer after it has been used to find a song
-    with state._lock:
-        state.text_buffer = ""
-
     if not text_to_process:
         songs = state.get_active_songs()
         if songs:
             match = random.choice(songs)
             print(f"\nBuffer empty. Picking a random song: {match['title']}")
-            state.set_candidates([match])
             update_song(match['id'])
         return
 
@@ -582,17 +594,15 @@ def on_press(key):
 
         if ctrl_pressed and shift_pressed and m_pressed:
             # Trigger the vibe search with whatever is in the buffer
-            buffer_snapshot = state.text_buffer
+            buffer_snapshot = state.consume_buffer()
             print(f"\n[TRIGGER] Manual song selection activated via CTRL+SHIFT+M")
             threading.Thread(target=process_and_play, args=(buffer_snapshot,), daemon=True).start()
             return # Don't add 'M' to the buffer when it's part of the trigger
 
         # Check for CTRL + BACKSPACE to clear buffer
         if ctrl_pressed and key == keyboard.Key.backspace:
-            with state._lock:
-                state.text_buffer = ""
+            state.clear_buffer()
             print("Buffer cleared.")
-            return
 
         result = state.update_buffer(key)
 
