@@ -583,7 +583,7 @@ def on_press(key):
         if ctrl_pressed and key == keyboard.Key.backspace:
             with state._lock:
                 state.text_buffer = ""
-            print("\rBuffer cleared.                                         ", end="", flush=True)
+            print("Buffer cleared.")
             return
 
         result = state.update_buffer(key)
