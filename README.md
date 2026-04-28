@@ -2,18 +2,18 @@
 
 An Improved Desktop Experience for YouTube Music. 
 
-As a user and one of the developers, I am inclined to say it will change the world, revolutionize music and cure diseases. However, I should clarify this is purely my personal perspective, shaped by the time I've spent bringing the program up and running.
+As a user and one of the developers, I am inclined to say it will change the world, revolutionize music, and cure diseases. However, I should clarify this is solely my personal perspective, shaped by the time I've spent bringing the program up and running.
 
 ---
 
 ###  How it works
 * Uses OAuth service to read your Youtube Liked List and filter out non-music.
-* Picks appropriate liked songs depending on context: what you write on the keyboard.
+* Picks appropriate liked songs depending on **context**: what you write on the keyboard.
 * **Prerequisites:** You must have [Git](https://git-scm.com/) and [uv](https://docs.astral.sh/uv/) installed on your system.
 
 ##  Initial Setup
 
-Setting up **KeyFlow** takes a few minutes, at the very least. All commands below should be run in your **CMD** or terminal.
+Setting up **KeyFlow** takes a few minutes, easily even longer. All commands below should be run in your **CMD** or terminal.
 
 ### 1. Clone the Project
 ```bash
@@ -28,7 +28,8 @@ cd KeyFlow
 4.  **Credentials:** * Go to **Credentials** → **Create Credentials** → **OAuth client ID**.
     * Select **Application type:** `Desktop app`.
     * Name it `KeyFlow` and click **Create**.
-5.  **Finalize:** Download the JSON, rename it to `client_secret.json`, and move it to the KeyFlow root folder. Please be aware, the download page only appears once and no more due to Google Cloud security rules.
+5.  **Finalize:** Download the JSON, rename it to `client_secret.json`, and move it to the KeyFlow root folder.   
+Please be aware, the download page only appears once and no more due to Google Cloud security rules.
 
 ---
 
