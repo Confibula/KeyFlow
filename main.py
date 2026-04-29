@@ -65,9 +65,7 @@ CONFIG_FILE = os.path.join(DATA_DIR, "config.json")
 SCOPES = ['https://www.googleapis.com/auth/youtube.readonly']
 
 DEFAULT_CONFIG = {
-    "years": 15,
-    "buffer_max_length": 300,
-    "num_songs": 10000
+    "years": 15
 }
 
 class KeyFlowState:
@@ -75,12 +73,15 @@ class KeyFlowState:
         self._lock = threading.RLock()
         self.music_metadata_cache = []
         self.active_songs = []
-        self._current_candidates = []
-        self._candidate_index = 0
-        self.max_candidates = 50
+        self.current_candidates = []
+        self.candidate_index = 0
         self.window = None
         self.settings_window = None
         self.window_ready = False
+        self.current_playing_video_id = None
+        self.max_candidates = 100
+        self.num_songs = 10000
+        self.buffer_max_length = 300
         self.text_buffer = ""
         self.pressed_keys = set()
         self.sync_in_progress = False
@@ -139,9 +140,9 @@ class KeyFlowState:
     def fill_candidates(self):
         with self._lock:
             if self.active_songs:
-                self._current_candidates = random.sample(self.active_songs, min(self.max_candidates, len(self.active_songs)))
-                self._candidate_index = 0
-                print(f"Filled candidates with {len(self._current_candidates)} random songs.")
+                self.current_candidates = random.sample(self.active_songs, min(self.max_candidates, len(self.active_songs)))
+                self.candidate_index = 0
+                print(f"Filled candidates with {len(self.current_candidates)} random songs.")
 
     def save_metadata(self, data):
         with self._lock:
@@ -187,7 +188,7 @@ class KeyFlowState:
             if char_to_add:
                 self.text_buffer += char_to_add
                 # Sliding window: keep only the most recent characters up to buffer_max_length
-                max_len = self.config.get("buffer_max_length", 200)
+                max_len = self.buffer_max_length
                 if len(self.text_buffer) > max_len:
                     self.text_buffer = self.text_buffer[-max_len:]
             return self.text_buffer
@@ -209,17 +210,17 @@ class KeyFlowState:
             self.text_buffer = ""
             return snapshot
 
-    def _set_candidates(self, matches):
+    def set_candidates(self, matches):
         with self._lock:
-            self._current_candidates = matches
-            self._candidate_index = 0
-            return self._current_candidates[0] if self._current_candidates else None
+            self.current_candidates = matches
+            self.candidate_index = 0
+            return self.current_candidates[0] if self.current_candidates else None
 
-    def _get_next_candidate(self):
+    def get_next_candidate(self):
         with self._lock:
-            self._candidate_index += 1
-            if self._current_candidates and self._candidate_index < len(self._current_candidates):
-                return self._current_candidates[self._candidate_index], self._candidate_index, len(self._current_candidates)
+            self.candidate_index += 1
+            if self.current_candidates and self.candidate_index < len(self.current_candidates):
+                return self.current_candidates[self.candidate_index], self.candidate_index, len(self.current_candidates)
             return None, 0, 0
 
     def remove_song(self, video_id):
@@ -238,6 +239,21 @@ class KeyFlowState:
             self.config['years'] = years
             self.save_config()
             self.filter_songs()
+
+    def check_and_prepare_song_update(self, video_id):
+        with self._lock:
+            if video_id == self.current_playing_video_id:
+                next_match, idx, total = self.get_next_candidate()
+                if next_match:
+                    print(f"Song {video_id} is already playing. Skipping to next candidate...")
+                    print(f"Skipping duplicate, trying candidate {idx+1}/{total}: {next_match['title']}")
+                    return next_match['id'], True  # True means skip, so call again
+                else:
+                    print("No more unique candidates left in current search results.")
+                    return None, False
+            else:
+                self.current_playing_video_id = video_id
+                return video_id, False
 
 state = KeyFlowState()
 
@@ -394,8 +410,8 @@ def sync_library_if_needed():
         print(f"Fetching liked songs... \
               This may take a while if you have a large library or it's your first sync.")
         
-        num_songs_limit = state.get_config("num_songs")
-        while not stop_loop and (len(new_songs) + len(existing_songs)) < num_songs_limit:
+        num_songs_limit = state.num_songs
+        while not stop_loop and (len(new_songs) + len(existing_songs)) < state.num_songs:
             request = youtube.playlistItems().list(
                 playlistId="LL",
                 part="snippet,contentDetails",
@@ -486,8 +502,8 @@ def find_best_matches(vibe_query):
     return [s[1] for s in scored_songs[:state.max_candidates]]
 
 class PlayerAPI:
-    def _play_next_candidate(self):
-        next_match, idx, total = state._get_next_candidate()
+    def play_next_candidate(self):
+        next_match, idx, total = state.get_next_candidate()
         if next_match:
             print(f"Match {idx + 1}/{total}: {next_match['title']}")
             threading.Thread(target=update_song, args=(next_match['id'],), daemon=True).start()
@@ -505,12 +521,12 @@ class PlayerAPI:
             print(f"Note: Song {song_title} was removed from Liked list, but it wasn't in your local library anyway.")
         
         print("Picking next candidate...")
-        self._play_next_candidate()
+        self.play_next_candidate()
 
     def handle_unavailable_song(self, video_id):
         print(f"\nSong unavailable detected: {video_id}. Removing from library...")
         state.remove_song(video_id)
-        self._play_next_candidate()
+        self.play_next_candidate()
 
 class SettingsAPI:
     def save_settings(self, years):
@@ -596,6 +612,13 @@ def on_page_finished(window):
 
 def update_song(video_id):
     if state.window and state.window_ready:
+        target_id, should_skip = state.check_and_prepare_song_update(video_id)
+        if target_id is None:
+            return
+        if should_skip:
+            threading.Thread(target=update_song, args=(target_id,), daemon=True).start()
+            return
+        
         # This script finds the actual video element and toggles its state
         script = """
             try {
@@ -612,7 +635,7 @@ def update_song(video_id):
         # Tiny delay to let the browser engine process the JS state change before navigation
         time.sleep(0.1)
 
-        new_url = f"https://music.youtube.com/watch?v={video_id}"
+        new_url = f"https://music.youtube.com/watch?v={target_id}"
         state.window.load_url(new_url)
 
 def process_and_play(captured_text):
@@ -630,7 +653,7 @@ def process_and_play(captured_text):
     try:
         matches = find_best_matches(text_to_process)
         if matches:
-            match = state._set_candidates(matches)
+            match = state.set_candidates(matches)
             if match:
                 print(f"\nMatch 1/{len(matches)}: {match['title']}")
                 update_song(match['id'])
