@@ -2,7 +2,7 @@
 
 ## Philosophy
 
-Feel like you can't properly interact with the youtube algorithm to make music discovery within Youtube Music meaningful?
+Feel like you can't properly interact with the Youtube algorithm to make music discovery within Youtube Music meaningful?
 
 Despair no more and try KeyFlow now!
 
