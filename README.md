@@ -1,5 +1,6 @@
 #  KeyFlow
 Agency in the Youtube Music discovery loop (Proof-of-Concept).
+* Key take-away: Embedding a query and key and matching them is a phenomenal way to search.
 
 ####  How it works (technically)
 * Uses OAuth service to read your Youtube Liked List and filter out non-music.
